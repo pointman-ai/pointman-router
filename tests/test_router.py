@@ -50,6 +50,7 @@ class ExtensionTests(unittest.TestCase):
             with self.assertRaises(ExtensionFailed) as e:
                 node.run("router.decide", PARAMS)
             self.assertEqual(e.exception.code, "no_weights")
+            self.assertTrue(str(e.exception).startswith("no_weights: "), str(e.exception))
             self.assertNotIn("build", node.log)
 
     def test_other_weights_are_refused(self):

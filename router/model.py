@@ -26,10 +26,12 @@ DEFAULT_CUTOFF = 0.05
 
 
 class Failure(Exception):
-    """A failure a caller can branch on: `code` reaches the node as the failed command's code."""
+    """A failure a caller can branch on: `code` goes to the node as the failed command's code, and starts the
+    message too (`no_weights: …`), as the node passes on only a failed job's message for now."""
 
     def __init__(self, message: str, code: str):
-        super().__init__(message)
+        prefix = f"{code}: "
+        super().__init__(message if message.startswith(prefix) else prefix + message)
         self.code = code
 
 

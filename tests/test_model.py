@@ -159,6 +159,10 @@ class WeightsTests(unittest.TestCase):
         self.assertEqual(e.exception.code, "no_weights")
         self.assertIn("tokenizer.json", str(e.exception))
 
+    def test_each_message_starts_with_its_code_once(self):
+        self.assertEqual(str(Failure("missing", "no_weights")), "no_weights: missing")
+        self.assertEqual(str(Failure("no_device: no GPU", "no_device")), "no_device: no GPU")   # from the worker
+
     def test_other_weights_are_refused_before_they_load(self):
         r, _, loads = router(self.w.settings(weights_sha256="0" * 64))
         with self.assertRaises(Failure) as e:
