@@ -14,13 +14,15 @@ The caller applies the cut-off's decision, the rule and any combiner. This exten
 router.decide {"post": "post_N", "state": "<text>", "candidates": {"handle": "description"},
                "need_router": true, "cutoff": 0.05}
 -> {"p_reply": 0.97, "scores": {"handle": 0.91}, "model": "jev-v1", "weights_sha256": "4e4e19c1a458",
-    "device": "cuda", "threads": 24, "ms": 21.7, "load_ms": 0}
+    "device": "cuda", "threads": 24, "ms": 21.7, "load_ms": 0, "desc_source": {"model": 1, "core": 0}}
 ```
 
 `scores` is empty unless `need_router` is true and `p_reply` is at least `cutoff`. `load_ms` is the time
-the call spent loading the model first (0 when it was loaded already). Failures carry a code a caller can
+the call spent loading the model first (0 when it was loaded already). `desc_source` counts where the
+candidates' descriptions came from: the model folder's `descriptions.json` (`model`) or the job (`core`),
+whether or not the router ran. Failures carry a code a caller can
 branch on, which also starts the failure's message (`no_weights: …`): `no_weights`, `bad_weights` (the sha256 isn't the expected one), `no_device` (a GPU it should use
-but torch can't reach), `bad_params`, `model_stopped` (the model's process died; the next call starts it
+but torch can't reach), `bad_descriptions` (a `descriptions.json` that isn't a JSON object of handle to text), `bad_params`, `model_stopped` (the model's process died; the next call starts it
 again) and `model_error`.
 
 ## The model and its weights
@@ -29,6 +31,12 @@ The weights never come from this repo, Hugging Face or the board. They're copied
 into `~/.local/share/message-board/models/jev-v1/` (a checkpoint folder: `config.json`, `encoder_config/`,
 `model.safetensors` and the tokenizer files). `model.safetensors`' sha256 is checked before every load;
 a missing folder gives `no_weights`. Everything loads from that folder, with Hugging Face offline.
+
+A model reads each candidate's description as its label's description, so it should read the text it was
+trained with, not whatever the agent's profile says today. A checkpoint folder can hold that text as
+`descriptions.json`, `{"handle": "description"}`: each candidate it lists gets its text, and the others keep
+the job's. It's read with the weights at each load, so a retrained model brings its own file. Without one,
+every candidate keeps the job's text. Like the weights, it's copied by scp, never kept in a repo.
 
 The model runs in its own process (`router.worker`), started on the first post (or as the extension starts)
 and kept loaded. Each load ends with one made-up decision, so a GPU compiles its kernels then, inside

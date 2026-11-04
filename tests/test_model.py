@@ -1,6 +1,7 @@
 """The decision, the weights check, the device pick and idle unloading, on a fake model: no torch needed."""
 
 import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -91,7 +92,8 @@ class DecideTests(unittest.TestCase):
     def test_the_answer_has_every_field_of_the_interface(self):
         r, _, _ = router(self.w.settings())
         a = r.decide(params())
-        self.assertEqual(set(a), {"p_reply", "scores", "model", "weights_sha256", "device", "threads", "ms", "load_ms"})
+        self.assertEqual(set(a), {"p_reply", "scores", "model", "weights_sha256", "device", "threads", "ms", "load_ms",
+                                  "desc_source"})
         self.assertEqual(a["model"], "jev-v1")
         self.assertEqual(a["weights_sha256"], self.w.sha[:12])
         self.assertEqual((a["device"], a["threads"]), ("cpu", 4))
@@ -237,6 +239,69 @@ class WeightsTests(unittest.TestCase):
         with mock.patch.dict("os.environ", {"HOME": str(self.w.dir.parent)}):
             r, _, _ = router(self.w.settings(model_dir="~/jev-v1"))
             self.assertEqual(r.check_weights(), self.w.sha)
+
+
+class DescriptionsTests(unittest.TestCase):
+    """The model folder's descriptions.json: the text the model was trained with, in place of the job's."""
+
+    def setUp(self):
+        self.w = Weights()
+
+    def tearDown(self):
+        self.w.tmp.cleanup()
+
+    def write(self, text):
+        (self.w.dir / model.DESCRIPTIONS).write_text(text if isinstance(text, str) else json.dumps(text))
+
+    def routed_labels(self, fake):
+        return [c[1]["route"]["labels"] for c in fake.calls if "route" in c[1]]
+
+    def test_the_models_text_is_used_for_each_candidate_it_lists(self):
+        self.write({"ci": "Runs CI, as it was in October", "other": "Not a candidate here"})
+        r, fake, _ = router(self.w.settings())
+        a = r.decide(params())
+        self.assertEqual(self.routed_labels(fake), [{"ci": "Runs CI, as it was in October", "docs": "Writes the docs"}])
+        self.assertEqual(a["desc_source"], {"model": 1, "core": 1})
+        self.assertEqual(list(a["scores"]), ["ci", "docs"])          # the candidates' order is kept
+
+    def test_without_the_file_the_jobs_text_is_used(self):
+        r, fake, _ = router(self.w.settings())
+        a = r.decide(params())
+        self.assertEqual(self.routed_labels(fake), [{"ci": "Runs the builds", "docs": "Writes the docs"}])
+        self.assertEqual(a["desc_source"], {"model": 0, "core": 2})
+
+    def test_the_counts_are_the_candidates_whether_or_not_the_router_runs(self):
+        self.write({"ci": "Runs CI", "docs": "Docs"})
+        r, fake, _ = router(self.w.settings())
+        self.assertEqual(r.decide(params(need_router=False))["desc_source"], {"model": 2, "core": 0})
+        self.assertEqual(r.decide(params(candidates={}))["desc_source"], {"model": 0, "core": 0})
+        self.assertEqual(self.routed_labels(fake), [])
+
+    def test_a_bad_file_is_refused_before_the_model_loads(self):
+        for bad in ("{not json", ["ci"], {"ci": 3}, "\udcff"):
+            with self.subTest(bad=bad):
+                if bad == "\udcff":
+                    (self.w.dir / model.DESCRIPTIONS).write_bytes(b"\xff\xfe{")
+                else:
+                    self.write(bad)
+                r, _, loads = router(self.w.settings())
+                with self.assertRaises(Failure) as e:
+                    r.decide(params())
+                self.assertEqual(e.exception.code, "bad_descriptions")
+                self.assertEqual(loads, [])
+                self.assertIsNone(r.model)
+
+    def test_the_file_is_read_with_each_load(self):
+        clock = Clock()
+        self.write({"ci": "first"})
+        r, fake, _ = router(self.w.settings(idle_unload_minutes=1), clock=clock)
+        r.decide(params())
+        self.write({"ci": "second"})
+        r.decide(params())                                   # still loaded: the text it loaded with
+        clock.t += 120
+        self.assertTrue(r.unload_if_idle())
+        r.decide(params())
+        self.assertEqual([l["ci"] for l in self.routed_labels(fake)], ["first", "first", "second"])
 
 
 class IdleTests(unittest.TestCase):

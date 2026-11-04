@@ -42,7 +42,7 @@ class ExtensionTests(unittest.TestCase):
     def test_it_says_hello_at_once_without_weights(self):
         t = time.monotonic()
         with self.node() as node:
-            self.assertEqual((node.info.id, node.info.version), ("router", "0.1.1"))
+            self.assertEqual((node.info.id, node.info.version), ("router", "0.1.2"))
         self.assertLess(time.monotonic() - t, 10)
 
     def test_no_weights_is_a_failure_a_caller_can_branch_on(self):

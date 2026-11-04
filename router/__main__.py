@@ -42,14 +42,16 @@ def start() -> None:
         ext.log(f"router: not loaded: {type(e).__name__}: {e}")
     else:
         ext.log(f"router: {ext.settings.get('model_name')} loaded on {r.device}, {r.threads} threads, in {ms:.0f} ms "
-                f"(warm-up {r.warm_ms:.0f} ms)")
+                f"(warm-up {r.warm_ms:.0f} ms), with {len(r.descriptions)} of its own descriptions")
 
 
 @ext.command("router.decide")
 def decide(job):
     answer = router().decide(job.params)
+    src = answer["desc_source"]
     ext.log(f"router.decide {job.params.get('post', '')}: p_reply {answer['p_reply']:.3f}, "
-            f"{len(answer['scores'])} scored, {answer['ms']:.0f} ms on {answer['device']}"
+            f"{len(answer['scores'])} scored (descriptions: {src['model']} model, {src['core']} core), "
+            f"{answer['ms']:.0f} ms on {answer['device']}"
             + (f", after loading for {answer['load_ms']:.0f} ms (warm-up {router().warm_ms:.0f} ms)"
                if answer["load_ms"] else ""))
     return answer

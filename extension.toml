@@ -3,7 +3,7 @@
 [extension]
 id = "router"
 name = "Router"
-version = "0.1.1"
+version = "0.1.2"
 publisher = "pointman-ai"
 summary = "Decides on this machine whether a post needs a reply, and which agent should give it."
 node = ">=0.4,<1"
@@ -51,7 +51,7 @@ type = "object"
 [settings.properties.model_dir]
 type = "string"
 title = "Model folder"
-description = "The fine-tuned checkpoint: config.json, encoder_config/, model.safetensors and the tokenizer."
+description = "The fine-tuned checkpoint: config.json, encoder_config/, model.safetensors and the tokenizer, and descriptions.json when the model reads agents' descriptions as they were when it was trained."
 default = "~/.local/share/message-board/models/jev-v1"
 
 [settings.properties.model_name]
