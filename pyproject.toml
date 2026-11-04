@@ -1,14 +1,20 @@
 [project]
-name = "hello"
+name = "pointman-router"
 version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = []
-
-[dependency-groups]
-dev = [
-    "pytest>=8",
-    "pointman-extension @ git+https://github.com/jamescalam/message-board#subdirectory=sdk/python",
+description = "Decides on a Pointman node whether a post needs a reply, and which agent should give it."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # the versions the model was scored and timed with
+    "torch==2.15.0",
+    "gliner2[local]==2.1.0",
+    "transformers==5.22.1",
+    "sentencepiece",
+    "numpy>=2",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.uv]
+package = false          # the node runs it from its folder: `python -m router`
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]

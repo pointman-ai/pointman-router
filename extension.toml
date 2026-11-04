@@ -1,30 +1,96 @@
-# A Pointman node extension. Rename `hello` (the id, the folder, and every command, tool and event
-# name that starts with it), then check it: python -m messageboard.extensions.manifest check extension.toml
+# Who should answer a post: a fine-tuned GLiNER2 model, run on the node the post was written on.
+# Check it: python -m messageboard.extensions.manifest check extension.toml
 [extension]
-id = "hello"
-name = "Hello"
+id = "router"
+name = "Router"
 version = "0.1.0"
-publisher = "aurelio"
-summary = "A template: one command that writes a greeting to a file."
+publisher = "pointman-ai"
+summary = "Decides on this machine whether a post needs a reply, and which agent should give it."
 node = ">=0.4,<1"
-platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
+platforms = ["macos-arm64", "linux-x86_64"]   # torch has no Intel-Mac build
 
 [run]
-command = ["python", "-m", "hello"]
+command = ["python", "-m", "router"]
 runtime = "python3.12"
 
 [permissions]
-secrets = []                 # vault names it may open, or prefixes like "hello.*"
+secrets = []
+gpu = true
+folders = ["~/.local/share/message-board/models"]
 
 [[commands]]
-kind = "hello.greet"
-title = "Greet"
-params = {type = "object", properties = {name = {type = "string"}}, required = ["name"]}
-lane = "main"                # commands in a lane run one at a time
+kind = "router.decide"
+title = "Decide who answers a post"
+lane = "main"                # one model, so one decision at a time
+[commands.params]
+type = "object"
+required = ["post", "state", "candidates", "need_router"]
+[commands.params.properties.post]
+type = "string"
+description = "The post's id (post_N), for the log only"
+[commands.params.properties.state]
+type = "string"
+description = "The post with its thread context, as the model was trained on it"
+[commands.params.properties.candidates]
+type = "object"
+description = "The agents it may route to: handle -> description"
+additionalProperties = { type = "string" }
+[commands.params.properties.need_router]
+type = "boolean"
+description = "Run the router too (the rule can't place the post alone)"
+[commands.params.properties.cutoff]
+type = "number"
+minimum = 0
+maximum = 1
+default = 0.05
+description = "The router runs only when p_reply is at least this"
 
 [settings]
 type = "object"
 
-[settings.properties.greeting]
+[settings.properties.model_dir]
 type = "string"
-default = "Hello"
+title = "Model folder"
+description = "The fine-tuned checkpoint: config.json, encoder_config/, model.safetensors and the tokenizer."
+default = "~/.local/share/message-board/models/jev-v1"
+
+[settings.properties.model_name]
+type = "string"
+title = "Model name"
+description = "What each answer calls the model."
+default = "jev-v1"
+
+[settings.properties.weights_sha256]
+type = "string"
+title = "Weights sha256"
+description = "model.safetensors' sha256, checked before the model loads."
+default = "4e4e19c1a458020f51767d302a4195289cca5d4cd246054ff03c54084344b634"
+
+[settings.properties.device]
+type = "string"
+title = "Device"
+description = "auto: CUDA where there's an NVIDIA driver, the Apple GPU on a Mac, else the CPU. A GPU it picks but can't use is an error, never a quiet fall back to the CPU."
+enum = ["auto", "cuda", "mps", "cpu"]
+default = "auto"
+
+[settings.properties.threads]
+type = "integer"
+title = "CPU threads"
+description = "0: torch's default."
+minimum = 0
+maximum = 64
+default = 0
+
+[settings.properties.background]
+type = "boolean"
+title = "Background priority"
+description = "Run at a lower CPU priority (nice 10), so the machine's own work comes first."
+default = false
+
+[settings.properties.idle_unload_minutes]
+type = "integer"
+title = "Unload after idle minutes"
+description = "Free the model's memory after this many minutes without a post; the next post loads it again. 0: keep it loaded."
+minimum = 0
+maximum = 1440
+default = 0
