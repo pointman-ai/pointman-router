@@ -31,7 +31,8 @@ into `~/.local/share/message-board/models/jev-v1/` (a checkpoint folder: `config
 a missing folder gives `no_weights`. Everything loads from that folder, with Hugging Face offline.
 
 The model runs in its own process (`router.worker`), started on the first post (or as the extension starts)
-and kept loaded. With `idle_unload_minutes` set, that process stops after so long without a post, which
+and kept loaded. Each load ends with one made-up decision, so a GPU compiles its kernels then, inside
+`load_ms`, and not on the first real post. With `idle_unload_minutes` set, that process stops after so long without a post, which
 gives all of its memory back; the next post starts it again (about 7 to 20 s). A crash in torch costs one
 decision, not the extension.
 
