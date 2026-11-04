@@ -41,7 +41,8 @@ def start() -> None:
     except Exception as e:  # noqa: BLE001 - the first post reports it as its failure
         ext.log(f"router: not loaded: {type(e).__name__}: {e}")
     else:
-        ext.log(f"router: {ext.settings.get('model_name')} loaded on {r.device}, {r.threads} threads, in {ms:.0f} ms")
+        ext.log(f"router: {ext.settings.get('model_name')} loaded on {r.device}, {r.threads} threads, in {ms:.0f} ms "
+                f"(warm-up {r.warm_ms:.0f} ms)")
 
 
 @ext.command("router.decide")
@@ -49,7 +50,8 @@ def decide(job):
     answer = router().decide(job.params)
     ext.log(f"router.decide {job.params.get('post', '')}: p_reply {answer['p_reply']:.3f}, "
             f"{len(answer['scores'])} scored, {answer['ms']:.0f} ms on {answer['device']}"
-            + (f", after loading for {answer['load_ms']:.0f} ms" if answer["load_ms"] else ""))
+            + (f", after loading for {answer['load_ms']:.0f} ms (warm-up {router().warm_ms:.0f} ms)"
+               if answer["load_ms"] else ""))
     return answer
 
 

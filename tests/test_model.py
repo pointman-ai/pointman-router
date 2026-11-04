@@ -18,10 +18,11 @@ class FakeModel:
     def __init__(self, reply=0.6, no_reply=0.2, route=None):
         self.reply, self.no_reply = reply, no_reply
         self.route = route or {}
-        self.calls = []
+        self.calls = []                    # real posts' calls
+        self.warm = []                     # the warm-up's, after each load
 
     def classify_text(self, text, tasks, include_confidence=False):
-        self.calls.append((text, tasks, include_confidence))
+        (self.warm if text in (model.WARM_TEXT, model.WARM_LONG) else self.calls).append((text, tasks, include_confidence))
         if "respond" in tasks:
             return {"respond": [{"label": "reply needed", "confidence": self.reply},
                                 {"label": "no reply needed", "confidence": self.no_reply}]}
@@ -132,6 +133,49 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(len(loads), 1)
         self.assertEqual(r.decide(params())["load_ms"], 0)
         self.assertGreaterEqual(first["load_ms"], 0)
+
+    def test_each_load_warms_up_with_a_made_up_decision_counted_in_load_ms(self):
+        clock = Clock()
+        r, fake, loads = router(self.w.settings(idle_unload_minutes=1), clock=clock)
+        r.decide(params())
+        self.assertEqual(fake.warm, [(model.WARM_LONG, GATE, True),
+                                     (model.WARM_LONG, model.route_task(model.WARM_MANY), True),
+                                     (model.WARM_TEXT, GATE, True),
+                                     (model.WARM_TEXT, model.route_task(model.WARM_CANDIDATES), True)])
+        self.assertEqual([c[0] for c in fake.calls], [STATE, STATE])
+        r.decide(params())
+        self.assertEqual(len(fake.warm), 4)          # warm already: no warm-up
+        clock.t += 120
+        r.unload_if_idle()
+        r.decide(params())
+        self.assertEqual(len(fake.warm), 8)          # loaded again: warmed again
+
+    def test_the_warm_up_is_in_load_ms_and_not_in_the_next_calls_ms(self):
+        import time
+
+        class SlowFirstCall(FakeModel):
+            def classify_text(self, text, tasks, include_confidence=False):
+                if text == model.WARM_TEXT and "respond" in tasks:
+                    time.sleep(0.2)                       # compiling kernels
+                return super().classify_text(text, tasks, include_confidence)
+
+        r, _, _ = router(self.w.settings(), SlowFirstCall())
+        a = r.decide(params())
+        self.assertGreaterEqual(a["load_ms"], 200)
+        self.assertGreaterEqual(r.warm_ms, 200)
+        self.assertLess(a["ms"], 100)
+
+    def test_a_model_that_fails_its_warm_up_isnt_kept(self):
+        class Broken(FakeModel):
+            def classify_text(self, text, tasks, include_confidence=False):
+                raise Failure("out of memory", "model_error")
+
+        r, _, loads = router(self.w.settings(), Broken())
+        for _ in range(2):
+            with self.assertRaises(Failure):
+                r.decide(params())
+            self.assertIsNone(r.model)
+        self.assertEqual(len(loads), 2)
 
     def test_a_single_label_answer_is_read_too(self):
         self.assertEqual(scores_of({"route": {"label": "ci", "confidence": 0.7}}, "route"), {"ci": 0.7})

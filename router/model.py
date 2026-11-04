@@ -39,6 +39,24 @@ def route_task(candidates: dict[str, str]) -> dict:
     return {"route": {"labels": dict(candidates), "multi_label": True, "cls_threshold": 0.0}}
 
 
+WARM_TEXT = "@someone: could you take a look at this when you have a minute?"
+WARM_CANDIDATES = {"a": "Builds and ships the apps.", "b": "Writes the docs."}
+WARM_LONG = "@someone in #general: " + "could you take a look at this when you have a minute? The build and the docs " \
+    "both changed today, and the thread above has more of the context. " * 8
+WARM_MANY = {f"agent{i}": "Builds, tests and ships one part of the product, and answers questions about it in its threads."
+             for i in range(8)}
+WARM_UPS = ((WARM_LONG, WARM_MANY), (WARM_TEXT, WARM_CANDIDATES))
+
+
+def warm_up(model: Any) -> None:
+    """Two made-up decisions, the gate then the router each time, right after loading. A GPU's first calls compile
+    its kernels; that time belongs to the load (load_ms), not to the first real posts' ms. A short post alone isn't
+    enough: on Apple's GPU a later post with more candidates still took 325 ms against 48 ms warm."""
+    for text, candidates in WARM_UPS:
+        model.classify_text(text, GATE, include_confidence=True)
+        model.classify_text(text, route_task(candidates), include_confidence=True)
+
+
 def scores_of(out: dict, task: str) -> dict[str, float]:
     x = out[task]
     return {r["label"]: float(r["confidence"]) for r in ([x] if isinstance(x, dict) else x)}
@@ -165,6 +183,7 @@ class Router:
         self.device: str | None = None
         self.threads = 0
         self.sha = ""
+        self.warm_ms = 0.0
         self._sha_seen: dict[tuple, str] = {}
         self._loader = loader
         self._clock = clock
@@ -192,7 +211,7 @@ class Router:
         return sha
 
     def ensure_loaded(self) -> float:
-        """Load it if it isn't: the milliseconds that took, 0 when it was loaded already."""
+        """Load it if it isn't, and warm it up: the milliseconds that took, 0 when it was loaded already."""
         with self.lock:
             if self.model is not None:
                 if getattr(self.model, "alive", True):
@@ -201,6 +220,13 @@ class Router:
             t = time.perf_counter()
             sha = self.check_weights()
             self.model, self.device, self.threads = self._loader(self.model_dir, self.settings)
+            w = time.perf_counter()
+            try:
+                warm_up(self.model)
+            except Exception:
+                self.unload()                      # a model that can't decide isn't kept; the next post tries again
+                raise
+            self.warm_ms = (time.perf_counter() - w) * 1000
             self.sha = sha
             self.last_used = self._clock()
             return (time.perf_counter() - t) * 1000
