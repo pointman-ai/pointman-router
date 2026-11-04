@@ -4,6 +4,10 @@ The gate asks "reply needed" or "no reply needed" of the post's state; p_reply i
 The router asks which candidate, with each agent's description as its label's description, only when the
 caller says the rule can't place the post and p_reply reaches the cutoff. Both calls are the ones the model
 was scored and timed with, so its answers match those runs.
+
+A model reads agents' descriptions as they were when it was trained, which needn't be their profiles today. Its
+folder's descriptions.json, when there is one, holds that text: it's used for every candidate it lists, and the
+job's text only for the others.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from typing import Any, Callable
 REPLY, NO_REPLY = "reply needed", "no reply needed"
 GATE = {"respond": {"labels": [REPLY, NO_REPLY], "multi_label": True, "cls_threshold": 0.0}}
 FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json")
+DESCRIPTIONS = "descriptions.json"         # optional: {handle: the description the model was trained with}
 DEFAULT_CUTOFF = 0.05
 
 
@@ -66,6 +71,27 @@ def p_reply(out: dict) -> float:
     s = scores_of(out, "respond")
     r = s.get(REPLY, 0.0)
     return r / max(r + s.get(NO_REPLY, 0.0), 1e-9)
+
+
+def read_descriptions(model_dir: Path) -> dict[str, str]:
+    """The model folder's descriptions.json, or {} when it has none (a model trained on today's profiles)."""
+    f = model_dir / DESCRIPTIONS
+    if not f.is_file():
+        return {}
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise Failure(f"{f} can't be read as JSON ({type(e).__name__})", "bad_descriptions") from None
+    if not isinstance(d, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in d.items()):
+        raise Failure(f"{f} must map each handle to its description", "bad_descriptions")
+    return d
+
+
+def with_model_text(candidates: dict[str, str], descriptions: dict[str, str]) -> tuple[dict[str, str], dict]:
+    """The candidates with the model's own description wherever it has one, and how many came from each place."""
+    texts = {h: descriptions.get(h, d) for h, d in candidates.items()}
+    n = sum(h in descriptions for h in candidates)
+    return texts, {"model": n, "core": len(candidates) - n}
 
 
 def sha256_of(path: Path, chunk: int = 8 << 20) -> str:
@@ -184,6 +210,7 @@ class Router:
         self.threads = 0
         self.sha = ""
         self.warm_ms = 0.0
+        self.descriptions: dict[str, str] = {}
         self._sha_seen: dict[tuple, str] = {}
         self._loader = loader
         self._clock = clock
@@ -219,6 +246,7 @@ class Router:
                 self.unload()                      # its process stopped between posts
             t = time.perf_counter()
             sha = self.check_weights()
+            descriptions = read_descriptions(self.model_dir)   # read with the weights, so they always match
             self.model, self.device, self.threads = self._loader(self.model_dir, self.settings)
             w = time.perf_counter()
             try:
@@ -227,7 +255,7 @@ class Router:
                 self.unload()                      # a model that can't decide isn't kept; the next post tries again
                 raise
             self.warm_ms = (time.perf_counter() - w) * 1000
-            self.sha = sha
+            self.sha, self.descriptions = sha, descriptions
             self.last_used = self._clock()
             return (time.perf_counter() - t) * 1000
 
@@ -249,14 +277,15 @@ class Router:
         post, state, candidates, need_router, cutoff = params_of(params)
         with self.lock:
             load_ms = self.ensure_loaded()
+            texts, desc_source = with_model_text(candidates, self.descriptions)
             t = time.perf_counter()
             pr = p_reply(self.model.classify_text(state, GATE, include_confidence=True))
             scores: dict[str, float] = {}
-            if need_router and pr >= cutoff and candidates:
-                scores = scores_of(self.model.classify_text(state, route_task(candidates), include_confidence=True),
+            if need_router and pr >= cutoff and texts:
+                scores = scores_of(self.model.classify_text(state, route_task(texts), include_confidence=True),
                                    "route")
             ms = (time.perf_counter() - t) * 1000
             self.last_used = self._clock()
             return {"p_reply": pr, "scores": scores, "model": self.settings.get("model_name") or "",
                     "weights_sha256": self.sha[:12], "device": self.device, "threads": self.threads,
-                    "ms": round(ms, 2), "load_ms": round(load_ms, 1)}
+                    "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source}
