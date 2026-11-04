@@ -10,7 +10,6 @@ from .libpaths import ensure
 
 ensure()  # before anything loads a native library
 
-import os  # noqa: E402
 import threading  # noqa: E402
 
 from pointman_extension import Extension  # noqa: E402
@@ -32,8 +31,6 @@ def router() -> Router:
 
 @ext.on_start
 def start() -> None:
-    if ext.settings.get("background"):
-        os.setpriority(os.PRIO_PROCESS, 0, 10)
     if int(ext.settings.get("idle_unload_minutes") or 0):
         return  # it loads on its first post, so a restart doesn't take the memory back
     r = router()

@@ -19,7 +19,7 @@ router.decide {"post": "post_N", "state": "<text>", "candidates": {"handle": "de
 
 `scores` is empty unless `need_router` is true and `p_reply` is at least `cutoff`. `load_ms` is the time
 the call spent loading the model first (0 when it was loaded already). Failures carry a code a caller can
-branch on: `no_weights`, `bad_weights` (the sha256 isn't the expected one), `no_device` (a GPU it should use
+branch on, which also starts the failure's message (`no_weights: …`): `no_weights`, `bad_weights` (the sha256 isn't the expected one), `no_device` (a GPU it should use
 but torch can't reach), `bad_params`, `model_stopped` (the model's process died; the next call starts it
 again) and `model_error`.
 

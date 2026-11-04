@@ -13,6 +13,16 @@ import sys
 import traceback
 from pathlib import Path
 
+BACKGROUND_NICE = 10
+
+
+def prioritise(settings: dict) -> None:
+    """With `background`, lower this process's priority before torch starts its threads, which inherit it. Here
+    rather than in the extension: on Linux a nice value is a thread's, and the extension starts its workers from
+    whichever thread needs one."""
+    if settings.get("background"):
+        os.setpriority(os.PRIO_PROCESS, 0, max(os.getpriority(os.PRIO_PROCESS, 0), BACKGROUND_NICE))
+
 
 def main() -> None:
     answers = os.fdopen(os.dup(1), "w", encoding="utf-8")
@@ -30,6 +40,7 @@ def main() -> None:
         req = json.loads(line)
         try:
             if "load" in req:
+                prioritise(req["load"]["settings"])
                 model, device, threads = load_gliner(Path(req["load"]["model_dir"]), req["load"]["settings"])
                 say({"ok": {"device": device, "threads": threads}})
             else:

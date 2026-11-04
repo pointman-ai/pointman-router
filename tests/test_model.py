@@ -314,6 +314,42 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(workers[0].alive)
 
 
+class PriorityTests(unittest.TestCase):
+    def test_a_background_worker_runs_at_nice_10_whichever_thread_starts_it(self):
+        import os
+        import threading
+
+        got = {}
+
+        def start():                       # as the lane's thread does, on a first post or after a crash
+            w = model.Worker()
+            try:
+                try:
+                    w.ask({"load": {"model_dir": "/nonexistent", "settings": {"background": True, "device": "cpu"}}})
+                except Failure:
+                    pass                   # no torch here, or no checkpoint: the priority is set before either
+                got["nice"] = os.getpriority(os.PRIO_PROCESS, w.proc.pid)
+            finally:
+                w.close()
+
+        mine = os.getpriority(os.PRIO_PROCESS, 0)
+        t = threading.Thread(target=start)
+        t.start()
+        t.join(60)
+        self.assertEqual(got["nice"], max(mine, 10))
+        self.assertEqual(os.getpriority(os.PRIO_PROCESS, 0), mine)
+
+    def test_no_background_keeps_the_priority(self):
+        from router import worker
+
+        with mock.patch.object(worker.os, "setpriority") as set_it, \
+                mock.patch.object(worker.os, "getpriority", return_value=0):
+            worker.prioritise({"background": False})
+            set_it.assert_not_called()
+            worker.prioritise({"background": True})
+            set_it.assert_called_once_with(worker.os.PRIO_PROCESS, 0, 10)
+
+
 def fake_torch(cuda=False, mps=False):
     return SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: cuda),
                            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: mps)))
