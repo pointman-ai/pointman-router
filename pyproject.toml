@@ -1,0 +1,14 @@
+[project]
+name = "hello"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pointman-extension @ git+https://github.com/jamescalam/message-board#subdirectory=sdk/python",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

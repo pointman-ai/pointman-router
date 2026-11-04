@@ -1,0 +1,30 @@
+# A Pointman node extension. Rename `hello` (the id, the folder, and every command, tool and event
+# name that starts with it), then check it: python -m messageboard.extensions.manifest check extension.toml
+[extension]
+id = "hello"
+name = "Hello"
+version = "0.1.0"
+publisher = "aurelio"
+summary = "A template: one command that writes a greeting to a file."
+node = ">=0.4,<1"
+platforms = ["macos-arm64", "macos-x86_64", "linux-x86_64", "linux-arm64"]
+
+[run]
+command = ["python", "-m", "hello"]
+runtime = "python3.12"
+
+[permissions]
+secrets = []                 # vault names it may open, or prefixes like "hello.*"
+
+[[commands]]
+kind = "hello.greet"
+title = "Greet"
+params = {type = "object", properties = {name = {type = "string"}}, required = ["name"]}
+lane = "main"                # commands in a lane run one at a time
+
+[settings]
+type = "object"
+
+[settings.properties.greeting]
+type = "string"
+default = "Hello"
