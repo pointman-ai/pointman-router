@@ -493,9 +493,6 @@ class DeviceTests(unittest.TestCase):
             pick_device("cuda", fake_torch(), nvidia=False, apple=False)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 FIT_STATE = "\n".join([
     "Thread: Loft lighting",
@@ -560,3 +557,7 @@ class FitTests(unittest.TestCase):
         self.assertEqual(model.route_schema({}),
                          {"classifications": [{"task": "route", "labels": ["nobody"], "multi_label": True,
                                                "label_descriptions": {"nobody": ""}}]})
+
+
+if __name__ == "__main__":
+    unittest.main()
