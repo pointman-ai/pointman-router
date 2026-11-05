@@ -14,13 +14,17 @@ The caller applies the cut-off's decision, the rule and any combiner. This exten
 router.decide {"post": "post_N", "state": "<text>", "candidates": {"handle": "description"},
                "need_router": true, "cutoff": 0.05}
 -> {"p_reply": 0.97, "scores": {"handle": 0.91}, "model": "jev-v1", "weights_sha256": "4e4e19c1a458",
-    "device": "cuda", "threads": 24, "ms": 21.7, "load_ms": 0, "desc_source": {"model": 1, "core": 0}}
+    "device": "cuda", "threads": 24, "ms": 21.7, "load_ms": 0, "desc_source": {"model": 1, "core": 0},
+    "earlier": 1}
 ```
 
 `scores` is empty unless `need_router` is true and `p_reply` is at least `cutoff`. `load_ms` is the time
 the call spent loading the model first (0 when it was loaded already). `desc_source` counts where the
 candidates' descriptions came from: the model folder's `descriptions.json` (`model`) or the job (`core`),
-whether or not the router ran. Failures carry a code a caller can
+whether or not the router ran. `earlier` is how many earlier posts the model read: with `fit_tokens` set, the
+oldest are dropped while the route input is over that many tokens (counted by the model's own processor, on the
+state and the candidates with their descriptions), keeping at least one, and `ms` includes that counting.
+Failures carry a code a caller can
 branch on, which also starts the failure's message (`no_weights: …`): `no_weights`, `bad_weights` (the sha256 isn't the expected one), `no_device` (a GPU it should use
 but torch can't reach), `bad_descriptions` (a `descriptions.json` that isn't a JSON object of handle to text), `bad_params`, `model_stopped` (the model's process died; the next call starts it
 again) and `model_error`.
@@ -55,6 +59,7 @@ decision, not the extension.
 | `threads` | 0 | CPU threads (0: torch's default) |
 | `background` | false | Run at nice 10, so the machine's own work comes first |
 | `idle_unload_minutes` | 0 | Stop the model's process after this long without a post (0: never) |
+| `fit_tokens` | 0 | For a model trained on "as many earlier posts as fit": drop the oldest earlier post while the route input is over this many tokens, keeping one (0: the state as it comes) |
 
 On a GPU it runs in fp16, on the CPU in fp32. A small Mac that also runs builds might use
 `device = "cpu"`, `threads = 2`, `background = true` and `idle_unload_minutes = 15`.

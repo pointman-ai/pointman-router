@@ -28,6 +28,7 @@ GATE = {"respond": {"labels": [REPLY, NO_REPLY], "multi_label": True, "cls_thres
 FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json")
 DESCRIPTIONS = "descriptions.json"         # optional: {handle: the description the model was trained with}
 DEFAULT_CUTOFF = 0.05
+EARLIER = ("Earlier post, by @", "Previous post, by @")   # a state's earlier-post lines, oldest first
 
 
 class Failure(Exception):
@@ -42,6 +43,32 @@ class Failure(Exception):
 
 def route_task(candidates: dict[str, str]) -> dict:
     return {"route": {"labels": dict(candidates), "multi_label": True, "cls_threshold": 0.0}}
+
+
+def route_schema(candidates: dict[str, str]) -> dict:
+    """The route call's input as GLiNER2's processor builds it, for counting its tokens: the candidates with their
+    descriptions, or one empty label when there are none. The same schema the training counted with (ctxfit.py)."""
+    labels = list(candidates) or ["nobody"]
+    return {"classifications": [{"task": "route", "labels": labels, "multi_label": True,
+                                 "label_descriptions": {h: candidates.get(h, "") for h in labels}}]}
+
+
+def earlier(state: str) -> int:
+    """How many earlier posts a state shows."""
+    return sum(line.startswith(EARLIER) for line in state.split("\n"))
+
+
+def fit(state: str, candidates: dict[str, str], count: Callable[[str, dict[str, str]], int], limit: int) -> str:
+    """The state with its oldest earlier posts dropped until the route input fits `limit` tokens, keeping at least
+    one: the rule the model was trained with ("as many earlier posts as fit"). `count` is the model's own token count
+    of the state with these candidates. The gate and the router both read what's left."""
+    lines = state.split("\n")
+    while True:
+        idx = [i for i, line in enumerate(lines) if line.startswith(EARLIER)]
+        text = "\n".join(lines)
+        if len(idx) <= 1 or count(text, candidates) <= limit:
+            return text
+        del lines[idx[0]]
 
 
 WARM_TEXT = "@someone: could you take a look at this when you have a minute?"
@@ -177,6 +204,9 @@ class Worker:
     def classify_text(self, text: str, tasks: dict, include_confidence: bool = True) -> dict:
         return self.ask({"text": text, "tasks": tasks})
 
+    def count_tokens(self, text: str, candidates: dict[str, str]) -> int:
+        return int(self.ask({"count": {"text": text, "schema": route_schema(candidates)}}))
+
     @property
     def alive(self) -> bool:
         return self.proc.poll() is None
@@ -279,6 +309,9 @@ class Router:
             load_ms = self.ensure_loaded()
             texts, desc_source = with_model_text(candidates, self.descriptions)
             t = time.perf_counter()
+            limit = int(self.settings.get("fit_tokens") or 0)
+            if limit:                              # the earlier posts that fit, counted with the final candidates
+                state = fit(state, texts, self.model.count_tokens, limit)
             pr = p_reply(self.model.classify_text(state, GATE, include_confidence=True))
             scores: dict[str, float] = {}
             if need_router and pr >= cutoff and texts:
@@ -288,4 +321,5 @@ class Router:
             self.last_used = self._clock()
             return {"p_reply": pr, "scores": scores, "model": self.settings.get("model_name") or "",
                     "weights_sha256": self.sha[:12], "device": self.device, "threads": self.threads,
-                    "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source}
+                    "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source,
+                    "earlier": earlier(state)}

@@ -21,6 +21,12 @@ class FakeModel:
         self.route = route or {}
         self.calls = []                    # real posts' calls
         self.warm = []                     # the warm-up's, after each load
+        self.counted = []                  # count_tokens' calls
+
+    def count_tokens(self, text, candidates):
+        """Words in the state and the descriptions: a stand-in for the processor's count."""
+        self.counted.append((text, dict(candidates)))
+        return len(text.split()) + sum(len(d.split()) for d in candidates.values())
 
     def classify_text(self, text, tasks, include_confidence=False):
         (self.warm if text in (model.WARM_TEXT, model.WARM_LONG) else self.calls).append((text, tasks, include_confidence))
@@ -93,7 +99,7 @@ class DecideTests(unittest.TestCase):
         r, _, _ = router(self.w.settings())
         a = r.decide(params())
         self.assertEqual(set(a), {"p_reply", "scores", "model", "weights_sha256", "device", "threads", "ms", "load_ms",
-                                  "desc_source"})
+                                  "desc_source", "earlier"})
         self.assertEqual(a["model"], "jev-v1")
         self.assertEqual(a["weights_sha256"], self.w.sha[:12])
         self.assertEqual((a["device"], a["threads"]), ("cpu", 4))
@@ -489,3 +495,68 @@ class DeviceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FIT_STATE = "\n".join([
+    "Thread: Loft lighting",
+    "Earlier post, by @scene: one two three four five",
+    "Earlier post, by @editor: six seven eight nine ten",
+    "Previous post, by @james: eleven twelve",
+    "New post, by @james: too blue?",
+])
+
+
+class FitTests(unittest.TestCase):
+    """The earlier posts that fit (ctxfit.py's rule): the oldest go first, at least one stays, the gate and the
+    router read the same trimmed state, and it's off unless fit_tokens is set."""
+
+    def setUp(self):
+        self.w = Weights()
+
+    def tearDown(self):
+        self.w.tmp.cleanup()
+
+    def test_it_is_off_unless_fit_tokens_is_set(self):
+        r, fake, _ = router(self.w.settings())
+        a = r.decide(params(state=FIT_STATE))
+        self.assertEqual(fake.counted, [])
+        self.assertEqual(fake.calls[0][0], FIT_STATE)
+        self.assertEqual(a["earlier"], 3)
+
+    def test_the_oldest_earlier_posts_go_until_it_fits(self):
+        words = lambda s: len(s.split())
+        full = words(FIT_STATE) + words("Runs the builds") + words("Writes the docs")
+        r, fake, _ = router(self.w.settings(fit_tokens=full - 1))       # one word over: the oldest goes
+        a = r.decide(params(state=FIT_STATE))
+        read = fake.calls[0][0]
+        self.assertNotIn("@scene", read)
+        self.assertIn("@editor", read)
+        self.assertEqual(a["earlier"], 2)
+        self.assertEqual([c[0] for c in fake.calls], [read, read], "the gate and the router read the same state")
+        self.assertTrue(read.startswith("Thread: Loft lighting") and read.endswith("New post, by @james: too blue?"))
+
+    def test_at_least_one_earlier_post_stays(self):
+        r, fake, _ = router(self.w.settings(fit_tokens=1))
+        a = r.decide(params(state=FIT_STATE))
+        self.assertEqual(a["earlier"], 1)
+        self.assertIn("Previous post, by @james", fake.calls[0][0])
+
+    def test_it_counts_with_the_final_candidates_and_the_models_own_text(self):
+        (self.w.dir / model.DESCRIPTIONS).write_text(json.dumps({"ci": "Builds and tests every push on the Air"}))
+        r, fake, _ = router(self.w.settings(fit_tokens=1000))
+        r.decide(params(state=FIT_STATE))
+        self.assertEqual(fake.counted[-1][1], {"ci": "Builds and tests every push on the Air", "docs": "Writes the docs"})
+
+    def test_a_state_with_no_earlier_post_is_left_as_it_is(self):
+        r, fake, _ = router(self.w.settings(fit_tokens=1))
+        a = r.decide(params())
+        self.assertEqual(fake.calls[0][0], STATE)
+        self.assertEqual(a["earlier"], 0)
+
+    def test_the_route_schema_is_the_one_training_counted_with(self):
+        self.assertEqual(model.route_schema({"ci": "Runs the builds"}),
+                         {"classifications": [{"task": "route", "labels": ["ci"], "multi_label": True,
+                                               "label_descriptions": {"ci": "Runs the builds"}}]})
+        self.assertEqual(model.route_schema({}),
+                         {"classifications": [{"task": "route", "labels": ["nobody"], "multi_label": True,
+                                               "label_descriptions": {"nobody": ""}}]})

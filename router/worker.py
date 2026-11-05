@@ -3,7 +3,8 @@
 Holding the model in a child process means unloading it gives all of its memory back (torch keeps much of a
 process's heap after the model is gone), and a crash in torch costs one decision, not the extension. The
 first line asks it to load ({"load": {"model_dir", "settings"}}); each line after is one classify_text call
-({"text", "tasks"}). Every answer is {"ok": …} or {"error", "code"}. Its own stdout goes to stderr (the
+({"text", "tasks"}), or a count of a route input's tokens with the model's own processor ({"count": {"text",
+"schema"}}). Every answer is {"ok": …} or {"error", "code"}. Its own stdout goes to stderr (the
 node's log), so nothing a library prints can get into the answers.
 """
 
@@ -43,6 +44,10 @@ def main() -> None:
                 prioritise(req["load"]["settings"])
                 model, device, threads = load_gliner(Path(req["load"]["model_dir"]), req["load"]["settings"])
                 say({"ok": {"device": device, "threads": threads}})
+            elif "count" in req:
+                c = req["count"]
+                say({"ok": len(model.processor.transform_and_format(c["text"], c["schema"],
+                                                                    build_targets=False).input_ids)})
             else:
                 say({"ok": model.classify_text(req["text"], req["tasks"], include_confidence=True)})
         except Failure as e:

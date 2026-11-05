@@ -3,7 +3,7 @@
 [extension]
 id = "router"
 name = "Router"
-version = "0.1.2"
+version = "0.1.3"
 publisher = "pointman-ai"
 summary = "Decides on this machine whether a post needs a reply, and which agent should give it."
 node = ">=0.4,<1"
@@ -93,4 +93,12 @@ title = "Unload after idle minutes"
 description = "Free the model's memory after this many minutes without a post; the next post loads it again. 0: keep it loaded."
 minimum = 0
 maximum = 1440
+default = 0
+
+[settings.properties.fit_tokens]
+type = "integer"
+title = "Fit earlier posts to tokens"
+description = "For a model trained on \"as many earlier posts as fit\": drop the oldest earlier post while the route input (the state plus the candidates' descriptions) is over this many tokens, keeping at least one. 0: use the state as it comes."
+minimum = 0
+maximum = 4096
 default = 0
