@@ -324,7 +324,7 @@ class DescriptionsTests(unittest.TestCase):
 
 
 class ConfidenceTests(unittest.TestCase):
-    """The model folder's calibration.json: a calibrated confidence beside the raw scores."""
+    """The model folder's calibration.json: calibrated numbers beside the raw scores and the raw gate."""
 
     SCORES = {"ci": 0.9, "docs": 0.2}
 
@@ -351,7 +351,7 @@ class ConfidenceTests(unittest.TestCase):
 
     def test_the_raw_scores_and_the_gate_are_the_same_with_or_without_it(self):
         without = self.decide()
-        self.write({"temperature": 1.1})
+        self.write({"temperature": 1.1, "gate_temperature": 1.96})
         with_it = self.decide()
         self.assertEqual(with_it["scores"], self.SCORES)
         self.assertEqual(with_it["scores"], without["scores"])
@@ -374,9 +374,51 @@ class ConfidenceTests(unittest.TestCase):
         self.assertGreater(c["a"], c["b"])
         self.assertAlmostEqual(sum(c.values()), 1.0)
 
+    def test_the_gate_is_its_log_odds_over_the_gate_temperature(self):
+        self.write({"gate_temperature": 1.96})
+        a = self.decide()
+        self.assertAlmostEqual(a["p_reply"], 0.75)
+        self.assertAlmostEqual(a["p_reply_calibrated"], 1 / (1 + math.exp(-math.log(3) / 1.96)))
+
+    def test_the_gate_field_is_on_every_answer(self):
+        self.write({"gate_temperature": 1.96})
+        self.assertIn("p_reply_calibrated", self.decide(need_router=False))
+        self.assertIn("p_reply_calibrated", self.decide(cutoff=0.9))
+        self.assertIn("p_reply_calibrated", self.decide(candidates={}))
+
+    def test_the_cutoff_reads_the_raw_gate(self):
+        self.write({"gate_temperature": 1.96})
+        fake = FakeModel(reply=0.04, no_reply=0.96, route=self.SCORES)
+        r, _, _ = router(self.w.settings(), fake)
+        a = r.decide(params())
+        self.assertAlmostEqual(a["p_reply"], 0.04)
+        self.assertGreater(a["p_reply_calibrated"], 0.05)
+        self.assertEqual(a["scores"], {})
+        self.assertEqual([tasks for _, tasks, _ in fake.calls if "route" in tasks], [])
+
+    def test_each_temperature_gives_only_its_own_field(self):
+        cases = (({"temperature": 1.1}, True, False), ({"gate_temperature": 1.96}, False, True), ({}, False, False),
+                 ({"temperature": 1.1, "gate_temperature": 1.96}, True, True))
+        for body, route, gate in cases:
+            with self.subTest(body=body):
+                self.write(body)
+                a = self.decide()
+                self.assertEqual("confidence" in a, route)
+                self.assertEqual("p_reply_calibrated" in a, gate)
+
+    def test_the_gate_at_the_ends_is_clamped(self):
+        self.assertAlmostEqual(model.calibrated_gate(1.0, 1.96), model.calibrated_gate(1 - 1e-6, 1.96))
+        self.assertAlmostEqual(model.calibrated_gate(0.0, 1.96), model.calibrated_gate(1e-6, 1.96))
+        self.assertAlmostEqual(model.calibrated_gate(0.5, 1.96), 0.5)
+
+    def test_a_very_small_gate_temperature_does_not_overflow(self):
+        self.assertAlmostEqual(model.calibrated_gate(0.9, 1e-6), 1.0)
+        self.assertAlmostEqual(model.calibrated_gate(0.1, 1e-6), 0.0)
+
     def test_a_bad_file_is_refused_before_the_model_loads(self):
-        for bad in ("{not json", ["x"], {}, {"temperature": 0}, {"temperature": -1}, {"temperature": True},
-                    {"temperature": "1.1"}, '{"temperature": NaN}'):
+        for bad in ("{not json", ["x"], {"temperature": 0}, {"temperature": -1}, {"temperature": True},
+                    {"temperature": "1.1"}, {"temperature": None}, '{"temperature": NaN}', {"gate_temperature": 0},
+                    {"gate_temperature": "1.96"}, {"temperature": 1.1, "gate_temperature": -1}):
             with self.subTest(bad=bad):
                 self.write(bad)
                 r, _, loads = router(self.w.settings())
