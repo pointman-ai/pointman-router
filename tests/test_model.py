@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from router import model
-from router.model import GATE, Failure, Router, params_of, pick_device, scores_of
+from router.model import GATE, Failure, Router, ordered, params_of, pick_device, scores_of
 
 STATE = "@james: the build's red again, can someone look?"
 
@@ -99,11 +99,23 @@ class DecideTests(unittest.TestCase):
         r, _, _ = router(self.w.settings())
         a = r.decide(params())
         self.assertEqual(set(a), {"p_reply", "scores", "model", "weights_sha256", "device", "threads", "ms", "load_ms",
-                                  "desc_source", "earlier"})
+                                  "desc_source", "order_source", "earlier"})
         self.assertEqual(a["model"], "jev-v1")
         self.assertEqual(a["weights_sha256"], self.w.sha[:12])
         self.assertEqual((a["device"], a["threads"]), ("cpu", 4))
         self.assertGreaterEqual(a["ms"], 0)
+
+    def test_the_route_call_reads_the_candidates_in_the_order_sent(self):
+        r, fake, _ = router(self.w.settings())
+        a = r.decide(params(order=["docs", "ci"]))
+        self.assertEqual(list(fake.calls[1][1]["route"]["labels"]), ["docs", "ci"])
+        self.assertEqual(a["order_source"], "core")
+
+    def test_without_an_order_the_candidates_are_sorted_so_a_post_always_gets_one_answer(self):
+        r, fake, _ = router(self.w.settings())
+        a = r.decide(params(candidates={"docs": "Writes the docs", "ci": "Runs the builds"}))
+        self.assertEqual(list(fake.calls[1][1]["route"]["labels"]), ["ci", "docs"])
+        self.assertEqual(a["order_source"], "sorted")
 
     def test_no_router_unless_asked(self):
         r, fake, _ = router(self.w.settings())
@@ -356,6 +368,15 @@ class ParamsTests(unittest.TestCase):
                 params_of(p)
             self.assertEqual(e.exception.code, "bad_params")
             self.assertNotIn("build", str(e.exception))
+
+    def test_an_order_must_be_exactly_the_candidates(self):
+        cands = {"ci": "Runs the builds", "docs": "Writes the docs"}
+        for order in ["ci", ["ci"], ["ci", "docs", "ops"], ["ci", "ci"], ["ci", 7], {"ci": 1, "docs": 2}]:
+            with self.subTest(order=order), self.assertRaises(Failure) as e:
+                ordered(cands, order)
+            self.assertEqual(e.exception.code, "bad_params")
+        self.assertEqual(ordered(cands, ["docs", "ci"]), ({"docs": "Writes the docs", "ci": "Runs the builds"}, "core"))
+        self.assertEqual(ordered({}, None), ({}, "sorted"))
 
     def test_good_params(self):
         self.assertEqual(params_of(params()), ("post_1", STATE, {"ci": "Runs the builds", "docs": "Writes the docs"},

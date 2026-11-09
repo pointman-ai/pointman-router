@@ -3,7 +3,7 @@
 [extension]
 id = "router"
 name = "Router"
-version = "0.1.4"
+version = "0.1.5"
 publisher = "pointman-ai"
 summary = "Decides on this machine whether a post needs a reply, and which agent should give it."
 node = ">=0.4,<1"
@@ -35,6 +35,10 @@ description = "The post with its thread context, as the model was trained on it"
 type = "object"
 description = "The agents it may route to: handle -> description"
 additionalProperties = { type = "string" }
+[commands.params.properties.order]
+type = "array"
+items = { type = "string" }
+description = "The candidates' handles in the order the model reads them: the order it was trained on (core's plan order). Without it, sorted by handle"
 [commands.params.properties.need_router]
 type = "boolean"
 description = "Run the router too (the rule can't place the post alone)"

@@ -146,6 +146,21 @@ def params_of(p: dict) -> tuple[str, str, dict[str, str], bool, float]:
     return post, state, cands, need, float(cutoff)
 
 
+def ordered(cands: dict[str, str], order) -> tuple[dict[str, str], str]:
+    """The candidates in the order the route call reads them, and where that order came from.
+
+    The route call's scores depend on its labels' order, and a job's `candidates` object doesn't keep its keys'
+    order on the way here. So the caller sends `order`, its handles in the order the model was trained on (core's
+    plan order), and the router keeps it ("core"). Without one, the handles are sorted ("sorted"), so a post always
+    gets the same answer. An `order` that isn't exactly the candidates' handles is refused, never guessed at."""
+    if order is None:
+        return dict(sorted(cands.items())), "sorted"
+    if (not isinstance(order, list) or not all(isinstance(h, str) for h in order)
+            or len(order) != len(cands) or set(order) != set(cands)):
+        raise Failure("order must list each candidate's handle once", "bad_params")
+    return {h: cands[h] for h in order}, "core"
+
+
 def pick_device(setting: str, torch: Any, nvidia: bool | None = None, apple: bool | None = None) -> str:
     """The device to run on. A GPU it picks (or is told to use) but torch can't reach is an error: a quiet
     fall back to the CPU would make every decision 20 times slower without anyone knowing."""
@@ -308,6 +323,7 @@ class Router:
 
     def decide(self, params: dict) -> dict:
         post, state, candidates, need_router, cutoff = params_of(params)
+        candidates, order_source = ordered(candidates, params.get("order"))
         with self.lock:
             load_ms = self.ensure_loaded()
             texts, desc_source = with_model_text(candidates, self.descriptions)
@@ -325,4 +341,5 @@ class Router:
             return {"p_reply": pr, "scores": scores, "model": self.settings.get("model_name") or "",
                     "weights_sha256": self.sha[:12], "device": self.device, "threads": self.threads,
                     "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source,
+                    "order_source": order_source,
                     "earlier": earlier(state)}
