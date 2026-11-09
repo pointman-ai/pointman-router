@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -320,6 +321,69 @@ class DescriptionsTests(unittest.TestCase):
         self.assertTrue(r.unload_if_idle())
         r.decide(params())
         self.assertEqual([l["ci"] for l in self.routed_labels(fake)], ["first", "first", "second"])
+
+
+class ConfidenceTests(unittest.TestCase):
+    """The model folder's calibration.json: a calibrated confidence beside the raw scores."""
+
+    SCORES = {"ci": 0.9, "docs": 0.2}
+
+    def setUp(self):
+        self.w = Weights()
+
+    def tearDown(self):
+        self.w.tmp.cleanup()
+
+    def write(self, text):
+        (self.w.dir / model.CALIBRATION).write_text(text if isinstance(text, str) else json.dumps(text))
+
+    def decide(self, **kw):
+        r, _, _ = router(self.w.settings(), FakeModel(route=self.SCORES))
+        return r.decide(params(**kw))
+
+    def test_it_is_the_softmax_of_the_log_odds_over_the_temperature(self):
+        self.write({"temperature": 1.1})
+        c = self.decide()["confidence"]
+        odds = math.exp((math.log(0.9 / 0.1) - math.log(0.2 / 0.8)) / 1.1)
+        self.assertAlmostEqual(c["ci"], odds / (odds + 1))
+        self.assertAlmostEqual(c["docs"], 1 / (odds + 1))
+        self.assertAlmostEqual(sum(c.values()), 1.0)
+
+    def test_the_raw_scores_and_the_gate_are_the_same_with_or_without_it(self):
+        without = self.decide()
+        self.write({"temperature": 1.1})
+        with_it = self.decide()
+        self.assertEqual(with_it["scores"], self.SCORES)
+        self.assertEqual(with_it["scores"], without["scores"])
+        self.assertEqual(with_it["p_reply"], without["p_reply"])
+
+    def test_without_the_file_there_is_no_field(self):
+        self.assertNotIn("confidence", self.decide())
+
+    def test_no_route_call_means_no_field(self):
+        self.write({"temperature": 1.1})
+        self.assertNotIn("confidence", self.decide(need_router=False))
+
+    def test_a_lone_candidate_the_route_call_scored_gets_one(self):
+        self.write({"temperature": 1.1})
+        r, _, _ = router(self.w.settings(), FakeModel(route={"ci": 0.3}))
+        self.assertEqual(r.decide(params(candidates={"ci": "Runs the builds"}))["confidence"], {"ci": 1.0})
+
+    def test_scores_at_the_ends_are_clamped(self):
+        c = model.confidence({"a": 1.0, "b": 0.0}, 1.1)
+        self.assertGreater(c["a"], c["b"])
+        self.assertAlmostEqual(sum(c.values()), 1.0)
+
+    def test_a_bad_file_is_refused_before_the_model_loads(self):
+        for bad in ("{not json", ["x"], {}, {"temperature": 0}, {"temperature": -1}, {"temperature": True},
+                    {"temperature": "1.1"}, '{"temperature": NaN}'):
+            with self.subTest(bad=bad):
+                self.write(bad)
+                r, _, loads = router(self.w.settings())
+                with self.assertRaises(Failure) as e:
+                    r.decide(params())
+                self.assertEqual(e.exception.code, "bad_calibration")
+                self.assertEqual(loads, [])
 
 
 class IdleTests(unittest.TestCase):

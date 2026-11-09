@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import platform
 import subprocess
@@ -27,6 +28,7 @@ REPLY, NO_REPLY = "reply needed", "no reply needed"
 GATE = {"respond": {"labels": [REPLY, NO_REPLY], "multi_label": True, "cls_threshold": 0.0}}
 FILES = ("config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json")
 DESCRIPTIONS = "descriptions.json"         # optional: {handle: the description the model was trained with}
+CALIBRATION = "calibration.json"           # optional: {"temperature": T}, fitted for this model's route scores
 DEFAULT_CUTOFF = 0.05
 EARLIER = ("Earlier post, by @", "Previous post, by @")   # a state's earlier-post lines, oldest first
 
@@ -112,6 +114,32 @@ def read_descriptions(model_dir: Path) -> dict[str, str]:
     if not isinstance(d, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in d.items()):
         raise Failure(f"{f} must map each handle to its description", "bad_descriptions")
     return d
+
+
+def read_temperature(model_dir: Path) -> float | None:
+    """The temperature in the model folder's calibration.json, or None when it has no such file."""
+    f = model_dir / CALIBRATION
+    if not f.is_file():
+        return None
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise Failure(f"{f} can't be read as JSON ({type(e).__name__})", "bad_calibration") from None
+    t = d.get("temperature") if isinstance(d, dict) else None
+    if isinstance(t, bool) or not isinstance(t, (int, float)) or not math.isfinite(t) or t <= 0:
+        raise Failure(f"{f} must give a temperature above 0", "bad_calibration")
+    return float(t)
+
+
+def confidence(scores: dict[str, float], temperature: float) -> dict[str, float]:
+    """How sure the route call is of each candidate: the softmax across them of each score's log-odds over the
+    temperature. It keeps the scores' order, so it can't change who ranks first, and it's what the offline runs
+    measured the model's calibration with."""
+    z = {h: math.log(p / (1 - p)) / temperature for h, p in ((h, min(max(s, 1e-6), 1 - 1e-6)) for h, s in scores.items())}
+    top = max(z.values())
+    e = {h: math.exp(v - top) for h, v in z.items()}
+    total = sum(e.values())
+    return {h: v / total for h, v in e.items()}
 
 
 def with_model_text(candidates: dict[str, str], descriptions: dict[str, str]) -> tuple[dict[str, str], dict]:
@@ -259,6 +287,7 @@ class Router:
         self.sha = ""
         self.warm_ms = 0.0
         self.descriptions: dict[str, str] = {}
+        self.temperature: float | None = None
         self._sha_seen: dict[tuple, str] = {}
         self._loader = loader
         self._clock = clock
@@ -295,6 +324,7 @@ class Router:
             t = time.perf_counter()
             sha = self.check_weights()
             descriptions = read_descriptions(self.model_dir)   # read with the weights, so they always match
+            temperature = read_temperature(self.model_dir)
             self.model, self.device, self.threads = self._loader(self.model_dir, self.settings)
             w = time.perf_counter()
             try:
@@ -303,7 +333,7 @@ class Router:
                 self.unload()                      # a model that can't decide isn't kept; the next post tries again
                 raise
             self.warm_ms = (time.perf_counter() - w) * 1000
-            self.sha, self.descriptions = sha, descriptions
+            self.sha, self.descriptions, self.temperature = sha, descriptions, temperature
             self.last_used = self._clock()
             return (time.perf_counter() - t) * 1000
 
@@ -338,8 +368,11 @@ class Router:
                                    "route")
             ms = (time.perf_counter() - t) * 1000
             self.last_used = self._clock()
-            return {"p_reply": pr, "scores": scores, "model": self.settings.get("model_name") or "",
-                    "weights_sha256": self.sha[:12], "device": self.device, "threads": self.threads,
-                    "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source,
-                    "order_source": order_source,
-                    "earlier": earlier(state)}
+            answer = {"p_reply": pr, "scores": scores, "model": self.settings.get("model_name") or "",
+                      "weights_sha256": self.sha[:12], "device": self.device, "threads": self.threads,
+                      "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source,
+                      "order_source": order_source,
+                      "earlier": earlier(state)}
+            if scores and self.temperature is not None:
+                answer["confidence"] = confidence(scores, self.temperature)
+            return answer
