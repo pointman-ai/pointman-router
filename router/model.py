@@ -160,17 +160,20 @@ def pick_device(setting: str, torch: Any, nvidia: bool | None = None, apple: boo
 
 
 def load_gliner(model_dir: Path, settings: dict) -> tuple[Any, str, int]:
-    """The checkpoint in fp16 on a GPU, fp32 on the CPU: (model, device, threads)."""
+    """The checkpoint in fp16 on a GPU, fp32 on the CPU: (model, device, threads). Built without the span and
+    count heads, which the gate and the route call never run (router/slim.py): a checkpoint loads the same with
+    or without their tensors, and they take no memory."""
     os.environ.setdefault("HF_HUB_OFFLINE", "1")          # everything it needs is in the folder
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     import torch
-    from gliner2 import AutoExtractor
+
+    from .slim import load_slim
 
     threads = int(settings.get("threads") or 0)
     if threads:
         torch.set_num_threads(threads)
     device = pick_device(settings.get("device") or "auto", torch)
-    m = AutoExtractor.from_pretrained(str(model_dir)).eval()
+    m = load_slim(model_dir).eval()
     if device != "cpu":
         m = m.to(device).half()
     return m, device, torch.get_num_threads()
