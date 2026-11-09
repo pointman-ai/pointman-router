@@ -36,6 +36,11 @@ into `~/.local/share/message-board/models/jev-v1/` (a checkpoint folder: `config
 `model.safetensors` and the tokenizer files). `model.safetensors`' sha256 is checked before every load;
 a missing folder gives `no_weights`. Everything loads from that folder, with Hugging Face offline.
 
+The model is built without GLiNER2's span head and count head (50.4M of GLiNER2.5-Decide's 486.4M
+parameters, 202 MB in fp32): the gate and the route call only classify, and classification never runs them
+(`router/slim.py`). A checkpoint loads the same with or without their tensors, every other tensor strictly;
+`slim_checkpoint` writes a `model.safetensors` without them, 202 MB smaller on disk.
+
 A model reads each candidate's description as its label's description, so it should read the text it was
 trained with, not whatever the agent's profile says today. A checkpoint folder can hold that text as
 `descriptions.json`, `{"handle": "description"}`: each candidate it lists gets its text, and the others keep
