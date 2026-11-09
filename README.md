@@ -18,7 +18,12 @@ router.decide {"post": "post_N", "state": "<text>", "candidates": {"handle": "de
     "order_source": "core", "earlier": 1}
 ```
 
-`scores` is empty unless `need_router` is true and `p_reply` is at least `cutoff`. `load_ms` is the time
+`scores` is empty unless `need_router` is true and `p_reply` is at least `cutoff`. The model's folder can have a
+`calibration.json` (`{"temperature": 1.1, "gate_temperature": 1.96}`), each key optional. With `temperature`, an
+answer whose route call ran also has `confidence`: per candidate, the softmax across them of each score's log-odds
+over that temperature. With `gate_temperature`, every answer also has `p_reply_calibrated`: `p_reply`'s log-odds over
+that temperature, back through a sigmoid. `scores` and `p_reply` stay raw, the `cutoff` reads the raw `p_reply`, and
+neither field changes a pick. `load_ms` is the time
 the call spent loading the model first (0 when it was loaded already). `desc_source` counts where the
 candidates' descriptions came from: the model folder's `descriptions.json` (`model`) or the job (`core`),
 whether or not the router ran. The route call's scores depend on the order of its labels, and a job's

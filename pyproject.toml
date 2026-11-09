@@ -1,6 +1,6 @@
 [project]
 name = "pointman-router"
-version = "0.1.5"
+version = "0.1.6"
 description = "Decides on a Pointman node whether a post needs a reply, and which agent should give it."
 requires-python = ">=3.12,<3.13"
 dependencies = [

@@ -3,7 +3,7 @@
 [extension]
 id = "router"
 name = "Router"
-version = "0.1.5"
+version = "0.1.6"
 publisher = "pointman-ai"
 summary = "Decides on this machine whether a post needs a reply, and which agent should give it."
 node = ">=0.4,<1"
