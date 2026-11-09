@@ -12,16 +12,20 @@ The caller applies the cut-off's decision, the rule and any combiner. This exten
 
 ```
 router.decide {"post": "post_N", "state": "<text>", "candidates": {"handle": "description"},
-               "need_router": true, "cutoff": 0.05}
+               "order": ["handle"], "need_router": true, "cutoff": 0.05}
 -> {"p_reply": 0.97, "scores": {"handle": 0.91}, "model": "jev-v1", "weights_sha256": "4e4e19c1a458",
     "device": "cuda", "threads": 24, "ms": 21.7, "load_ms": 0, "desc_source": {"model": 1, "core": 0},
-    "earlier": 1}
+    "order_source": "core", "earlier": 1}
 ```
 
 `scores` is empty unless `need_router` is true and `p_reply` is at least `cutoff`. `load_ms` is the time
 the call spent loading the model first (0 when it was loaded already). `desc_source` counts where the
 candidates' descriptions came from: the model folder's `descriptions.json` (`model`) or the job (`core`),
-whether or not the router ran. `earlier` is how many earlier posts the model read: with `fit_tokens` set, the
+whether or not the router ran. The route call's scores depend on the order of its labels, and a job's
+`candidates` object doesn't keep its keys' order on the way to the node, so `order` lists the handles in the
+order the model was trained on (core's plan order). The router keeps it (`order_source` `core`). Without it, the
+handles are sorted (`sorted`), so a post always gets the same answer, and an `order` that isn't exactly the
+candidates' handles is `bad_params`. `earlier` is how many earlier posts the model read: with `fit_tokens` set, the
 oldest are dropped while the route input is over that many tokens (counted by the model's own processor, on the
 state and the candidates with their descriptions), keeping at least one, and `ms` includes that counting.
 Failures carry a code a caller can
