@@ -31,10 +31,13 @@ class FakeModel:
 
     def classify_text(self, text, tasks, include_confidence=False):
         (self.warm if text in (model.WARM_TEXT, model.WARM_LONG) else self.calls).append((text, tasks, include_confidence))
+        out = {}
         if "respond" in tasks:
-            return {"respond": [{"label": "reply needed", "confidence": self.reply},
-                                {"label": "no reply needed", "confidence": self.no_reply}]}
-        return {"route": [{"label": h, "confidence": self.route.get(h, 0.1)} for h in tasks["route"]["labels"]]}
+            out["respond"] = [{"label": "reply needed", "confidence": self.reply},
+                              {"label": "no reply needed", "confidence": self.no_reply}]
+        if "route" in tasks:
+            out["route"] = [{"label": h, "confidence": self.route.get(h, 0.1)} for h in tasks["route"]["labels"]]
+        return out
 
 
 class Weights:
@@ -100,7 +103,8 @@ class DecideTests(unittest.TestCase):
         r, _, _ = router(self.w.settings())
         a = r.decide(params())
         self.assertEqual(set(a), {"p_reply", "scores", "model", "weights_sha256", "device", "threads", "ms", "load_ms",
-                                  "desc_source", "order_source", "earlier"})
+                                  "desc_source", "order_source", "one_call", "earlier"})
+        self.assertIs(a["one_call"], False)
         self.assertEqual(a["model"], "jev-v1")
         self.assertEqual(a["weights_sha256"], self.w.sha[:12])
         self.assertEqual((a["device"], a["threads"]), ("cpu", 4))
@@ -201,6 +205,107 @@ class DecideTests(unittest.TestCase):
     def test_a_single_label_answer_is_read_too(self):
         self.assertEqual(scores_of({"route": {"label": "ci", "confidence": 0.7}}, "route"), {"ci": 0.7})
 
+
+
+class OneCallTests(unittest.TestCase):
+    """one_call: both tasks in one call whenever there's a candidate, the gate first, as the one-call model was
+    scored. Off, the calls are the two they always were."""
+
+    SCORES = {"ci": 0.9, "docs": 0.2}
+    BOTH = {"respond": {"labels": ["reply needed", "no reply needed"], "multi_label": True, "cls_threshold": 0.0},
+            "route": {"labels": {"ci": "Runs the builds", "docs": "Writes the docs"}, "multi_label": True,
+                      "cls_threshold": 0.0}}
+
+    def setUp(self):
+        self.w = Weights()
+
+    def tearDown(self):
+        self.w.tmp.cleanup()
+
+    def decide(self, fake=None, on=True, **more):
+        fake = fake or FakeModel(route=self.SCORES)
+        r, _, _ = router(self.w.settings(one_call=on), fake)
+        return r.decide(params(**more)), fake
+
+    def test_one_call_asks_both_tasks_gate_first(self):
+        a, fake = self.decide()
+        self.assertEqual(fake.calls, [(STATE, self.BOTH, True)])
+        self.assertEqual(list(fake.calls[0][1]), ["respond", "route"])
+        self.assertAlmostEqual(a["p_reply"], 0.75)
+        self.assertEqual(a["scores"], self.SCORES)
+        self.assertIs(a["one_call"], True)
+
+    def test_the_one_call_is_made_when_the_router_isnt_asked_for_but_its_scores_arent_kept(self):
+        a, fake = self.decide(need_router=False)
+        self.assertEqual(fake.calls, [(STATE, self.BOTH, True)])
+        self.assertAlmostEqual(a["p_reply"], 0.75)
+        self.assertEqual(a["scores"], {})
+
+    def test_under_the_cutoff_means_nobody(self):
+        a, fake = self.decide(FakeModel(reply=0.04, no_reply=0.96, route=self.SCORES), cutoff=0.05)
+        self.assertEqual(len(fake.calls), 1)
+        self.assertAlmostEqual(a["p_reply"], 0.04)
+        self.assertEqual(a["scores"], {})
+
+    def test_at_the_cutoff_its_scores_are_kept(self):
+        a, _ = self.decide(FakeModel(reply=0.05, no_reply=0.95, route=self.SCORES), cutoff=0.05)
+        self.assertEqual(a["scores"], self.SCORES)
+
+    def test_one_candidate_is_one_call_too(self):
+        a, fake = self.decide(candidates={"ci": "Runs the builds"})
+        self.assertEqual(list(fake.calls[0][1]), ["respond", "route"])
+        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(a["scores"], {"ci": 0.9})
+
+    def test_no_candidate_is_the_gate_alone(self):
+        a, fake = self.decide(candidates={})
+        self.assertEqual(fake.calls, [(STATE, GATE, True)])
+        self.assertEqual(a["scores"], {})
+
+    def test_it_reads_the_candidates_in_the_order_sent_with_the_models_own_text(self):
+        (self.w.dir / model.DESCRIPTIONS).write_text(json.dumps({"docs": "The docs, as trained"}))
+        a, fake = self.decide(order=["docs", "ci"])
+        labels = fake.calls[0][1]["route"]["labels"]
+        self.assertEqual(list(labels), ["docs", "ci"])
+        self.assertEqual(labels["docs"], "The docs, as trained")
+        self.assertEqual((a["order_source"], a["desc_source"]), ("core", {"model": 1, "core": 1}))
+
+    def test_the_trim_counts_the_route_input_as_without_it(self):
+        state = "\n".join(["Earlier post, by @a: " + "word " * 30, "Earlier post, by @b: " + "word " * 30,
+                           "@james: the build's red again, can someone look?"])
+        for on in (False, True):
+            with self.subTest(one_call=on):
+                fake = FakeModel(route=self.SCORES)
+                r, _, _ = router(self.w.settings(one_call=on, fit_tokens=50), fake)
+                a = r.decide(params(state=state))
+                self.assertEqual(a["earlier"], 1)
+                self.assertTrue(all(set(c) == {"ci", "docs"} for _, c in fake.counted))
+
+    def test_calibration_reads_the_one_calls_numbers(self):
+        (self.w.dir / model.CALIBRATION).write_text(json.dumps({"temperature": 1.1, "gate_temperature": 1.96}))
+        a, _ = self.decide()
+        self.assertEqual(a["confidence"], model.confidence(self.SCORES, 1.1))
+        self.assertAlmostEqual(a["p_reply_calibrated"], model.calibrated_gate(0.75, 1.96))
+        b, _ = self.decide(need_router=False)
+        self.assertNotIn("confidence", b)
+        self.assertIn("p_reply_calibrated", b)
+
+    def test_the_warm_up_makes_the_one_call(self):
+        _, fake = self.decide()
+        self.assertEqual(fake.warm, [(model.WARM_LONG, model.both_tasks(model.WARM_MANY), True),
+                                     (model.WARM_TEXT, model.both_tasks(model.WARM_CANDIDATES), True)])
+
+    def test_off_is_the_two_calls_as_before(self):
+        for settings in ({"one_call": False}, {}):
+            with self.subTest(settings=settings):
+                fake = FakeModel(route=self.SCORES)
+                r, _, _ = router(self.w.settings(**settings), fake)
+                a = r.decide(params())
+                self.assertEqual(fake.calls, [(STATE, GATE, True),
+                                              (STATE, model.route_task({"ci": "Runs the builds",
+                                                                        "docs": "Writes the docs"}), True)])
+                self.assertEqual(len(fake.warm), 4)
+                self.assertIs(a["one_call"], False)
 
 class WeightsTests(unittest.TestCase):
     def setUp(self):

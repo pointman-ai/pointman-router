@@ -5,6 +5,11 @@ The router asks which candidate, with each agent's description as its label's de
 caller says the rule can't place the post and p_reply reaches the cutoff. Both calls are the ones the model
 was scored and timed with, so its answers match those runs.
 
+With `one_call`, for a model trained with both tasks on every example, a post with a candidate gets one call
+that asks both, the gate first: p_reply comes from it, and its scores are kept only when the caller asks for
+the router and p_reply reaches the cutoff. That call is made whether or not the router is asked for, as the
+model was scored that way. A post with no candidate gets the gate alone, as without it.
+
 A model reads agents' descriptions as they were when it was trained, which needn't be their profiles today. Its
 folder's descriptions.json, when there is one, holds that text: it's used for every candidate it lists, and the
 job's text only for the others.
@@ -48,6 +53,11 @@ def route_task(candidates: dict[str, str]) -> dict:
     return {"route": {"labels": dict(candidates), "multi_label": True, "cls_threshold": 0.0}}
 
 
+def both_tasks(candidates: dict[str, str]) -> dict:
+    """One call's tasks with `one_call`: the gate, then the route. Their order is the one the model was scored in."""
+    return {**GATE, **route_task(candidates)}
+
+
 def route_schema(candidates: dict[str, str]) -> dict:
     """The route call's input as GLiNER2's processor builds it, for counting its tokens: the candidates with their
     descriptions, or one empty label when there are none. The same schema the training counted with (ctxfit.py)."""
@@ -83,11 +93,15 @@ WARM_MANY = {f"agent{i}": "Builds, tests and ships one part of the product, and 
 WARM_UPS = ((WARM_LONG, WARM_MANY), (WARM_TEXT, WARM_CANDIDATES))
 
 
-def warm_up(model: Any) -> None:
-    """Two made-up decisions, the gate then the router each time, right after loading. A GPU's first calls compile
-    its kernels; that time belongs to the load (load_ms), not to the first real posts' ms. A short post alone isn't
-    enough: on Apple's GPU a later post with more candidates still took 325 ms against 48 ms warm."""
+def warm_up(model: Any, one_call: bool = False) -> None:
+    """Two made-up decisions, the gate then the router each time (with one_call, the one call that asks both),
+    right after loading. A GPU's first calls compile its kernels; that time belongs to the load (load_ms), not to
+    the first real posts' ms. A short post alone isn't enough: on Apple's GPU a later post with more candidates
+    still took 325 ms against 48 ms warm."""
     for text, candidates in WARM_UPS:
+        if one_call:
+            model.classify_text(text, both_tasks(candidates), include_confidence=True)
+            continue
         model.classify_text(text, GATE, include_confidence=True)
         model.classify_text(text, route_task(candidates), include_confidence=True)
 
@@ -343,7 +357,7 @@ class Router:
             self.model, self.device, self.threads = self._loader(self.model_dir, self.settings)
             w = time.perf_counter()
             try:
-                warm_up(self.model)
+                warm_up(self.model, bool(self.settings.get("one_call")))
             except Exception:
                 self.unload()                      # a model that can't decide isn't kept; the next post tries again
                 raise
@@ -376,17 +390,24 @@ class Router:
             limit = int(self.settings.get("fit_tokens") or 0)
             if limit:                              # the earlier posts that fit, counted with the final candidates
                 state = fit(state, texts, self.model.count_tokens, limit)
-            pr = p_reply(self.model.classify_text(state, GATE, include_confidence=True))
+            one_call = bool(self.settings.get("one_call"))
             scores: dict[str, float] = {}
-            if need_router and pr >= cutoff and texts:
-                scores = scores_of(self.model.classify_text(state, route_task(texts), include_confidence=True),
-                                   "route")
+            if one_call and texts:                 # both tasks in one call, made even when the router isn't asked for
+                out = self.model.classify_text(state, both_tasks(texts), include_confidence=True)
+                pr = p_reply(out)
+                if need_router and pr >= cutoff:
+                    scores = scores_of(out, "route")
+            else:
+                pr = p_reply(self.model.classify_text(state, GATE, include_confidence=True))
+                if need_router and pr >= cutoff and texts:
+                    scores = scores_of(self.model.classify_text(state, route_task(texts), include_confidence=True),
+                                       "route")
             ms = (time.perf_counter() - t) * 1000
             self.last_used = self._clock()
             answer = {"p_reply": pr, "scores": scores, "model": self.settings.get("model_name") or "",
                       "weights_sha256": self.sha[:12], "device": self.device, "threads": self.threads,
                       "ms": round(ms, 2), "load_ms": round(load_ms, 1), "desc_source": desc_source,
-                      "order_source": order_source,
+                      "order_source": order_source, "one_call": one_call,
                       "earlier": earlier(state)}
             if "gate_temperature" in self.calibration:
                 answer["p_reply_calibrated"] = calibrated_gate(pr, self.calibration["gate_temperature"])

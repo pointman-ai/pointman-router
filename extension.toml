@@ -3,7 +3,7 @@
 [extension]
 id = "router"
 name = "Router"
-version = "0.1.6"
+version = "0.1.7"
 publisher = "pointman-ai"
 summary = "Decides on this machine whether a post needs a reply, and which agent should give it."
 node = ">=0.4,<1"
@@ -106,3 +106,9 @@ description = "For a model trained on \"as many earlier posts as fit\": drop the
 minimum = 0
 maximum = 4096
 default = 0
+
+[settings.properties.one_call]
+type = "boolean"
+title = "One call per post"
+description = "For a model trained with both tasks on every example: a post with a candidate gets one call that asks both, the gate first, made even when the router isn't asked for. p_reply comes from it, and its scores are kept only when need_router is true and p_reply reaches the cutoff. A post with no candidate gets the gate alone. Off: the gate, then the router when asked, as two calls."
+default = false
